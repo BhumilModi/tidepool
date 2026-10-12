@@ -44,7 +44,7 @@ const OBSTACLES: Record<string, string[]> = {
 const AMBIENT = ['cactus', 'tall', 'double', 'rock']
 const CLOUD = ['.##..', '#####']
 
-const rand = (n: number) => {
+export const rand = (n: number) => {
   const x = Math.sin(n * 12.9898) * 43758.5453
   return x - Math.floor(x)
 }

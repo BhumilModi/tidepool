@@ -9,6 +9,8 @@ import { DONE_COLS, DONE_ROWS, doneCrabCells, encodeCells } from '../dock'
 import type { PlanData } from '../planview'
 import { MAX_TAIL_BYTES, shellRows, shellTails } from '../shell'
 import { receipt, receiptKey } from '../receipt'
+import { GAME_BEST_KEY, GAME_HEIGHT, GAME_LINGER_MS, GAME_ON_KEY, PLAY_COMMAND } from '../pop'
+import type { PopProps } from './pop-surface'
 import { RAIL_COLUMNS, pickTurn, railRows, railSeat, railSummary, sections, showBars, turnOfCall, turnWindow } from '../rail'
 import type { SectionName } from '../rail'
 import { diffEdits, fileRows, relPath } from '../files'
@@ -43,6 +45,8 @@ const tick = atom({ plugin: 'tidepool', key: 'tick' } as const, 0)
 const railCollapsed = atom({ plugin: 'tidepool', key: 'railCollapsed' } as const, [])
 const diffFile = atom({ plugin: 'tidepool', key: 'diffFile' } as const, null)
 const planState = atom({ plugin: 'tidepool', key: 'planState' } as const, 'running')
+const gameOn = atom({ plugin: 'tidepool', key: 'gameOn' } as const, false)
+const gameBest = atom({ plugin: 'tidepool', key: 'gameBest' } as const, 0)
 const railFilter = atom({ plugin: 'tidepool', key: 'railFilter' } as const, null)
 
 const TOOL = 6
@@ -333,7 +337,8 @@ export function registerRail(on: On) {
     const muted = { ...C, accent: C.segAlt, onAccent: C.faint }
     // A section header: its fold mark (the Button; a Button takes no colours), then the powerline pill the Plan
     // header and the status line use, dropping segments from the right rather than wrapping.
-    const header = (name: SectionName, label: string, open: boolean, empty: boolean, rest: Segment[], after?: RenderElement | null) => {
+    // `fold` replaces the fold mark's press (the play section's turns the game off).
+    const header = (name: SectionName | 'play', label: string, open: boolean, empty: boolean, rest: Segment[], after?: RenderElement | null, fold = () => flip(name as SectionName, empty)) => {
       const P = open && !empty ? C : muted
       let segs: Segment[] = [{ bg: P.accent, parts: [{ text: ` ${label} `, color: P.onAccent, bold: true }] }, ...rest]
       const glyphs = glyphsOn(e.surface)
@@ -343,7 +348,7 @@ export function registerRail(on: On) {
       return (
         <Box key={`sec-${name}`} flexDirection="row" height={1}>
           <Box flexShrink={0}>
-            <Button key={`sec:${name}`} plain onPress={() => flip(name, empty)}>{open && !empty ? '▾' : '▸'}</Button>
+            <Button key={`sec:${name}`} plain onPress={fold}>{open && !empty ? '▾' : '▸'}</Button>
             <Text> </Text>
             {runs.map((run, i) => (
               <Text key={`pill-${name}-${i === nameAt ? 'name' : i}`} color={run.color} backgroundColor={run.backgroundColor} bold={run.bold}>
@@ -362,8 +367,12 @@ export function registerRail(on: On) {
     // The turn's prompt, on one row, or two when it does not fit one; a longer prompt is cut at the end of the second.
     const promptRows = !turn?.prompt ? 0 : turn.prompt.length <= width ? 1 : PROMPT_ROWS
     const receiptRows = parts.length ? 1 : 0
+    // Anemone pop, while a turn runs and a moment after, when it is on: its rows come off the sections' share.
+    const lastEnd = list.at(-1)?.endedAt ?? -Infinity
+    const gameShown = 'Client' in ui && (await read($, gameOn)) && (live !== undefined || lastEnd > clock - GAME_LINGER_MS)
+    const playRows = gameShown ? GAME_HEIGHT + 2 : 0
     const rows = sections({
-      bodyRows: p.scroll.bodyRows,
+      bodyRows: p.scroll.bodyRows - playRows,
       asks: { timeline: turn ? promptRows + receiptRows + (all.length === 0 ? 1 : shownRows.length + (bars ? 1 : 0)) : 0, plan: plan?.ask ?? 0, files: files.length },
       open: { timeline: !collapsed.includes('timeline'), plan: !collapsed.includes('plan'), files: !collapsed.includes('files') },
       all: showAll,
@@ -371,7 +380,7 @@ export function registerRail(on: On) {
 
     const out: RenderElement[] = [brand]
     // A blank row above each section header, so the sections read apart.
-    const gap = (name: SectionName, el: RenderElement) => <Box key={`sec-${name}-gap`} marginTop={1} flexDirection="column">{el}</Box>
+    const gap = (name: SectionName | 'play', el: RenderElement) => <Box key={`sec-${name}-gap`} marginTop={1} flexDirection="column">{el}</Box>
     // Each open section's body holds its whole share, so the split stays put however little it shows.
     const body = (key: string, rowsHeld: number, children: RenderChildren) => <Box key={key} flexDirection="column" height={rowsHeld} overflow="hidden">{children}</Box>
 
@@ -463,7 +472,44 @@ export function registerRail(on: On) {
       out.push(body('files-body', rows.files, fileLines))
     }
 
+    // Play: anemone pop (features/pop-surface.tsx). It holds while Claude needs the person, and when the turn ends
+    // it holds for GAME_LINGER_MS, then folds.
+    if (gameShown && 'Client' in ui) {
+      const { Client } = ui
+      const best = await read($, gameBest)
+      const off = async () => {
+        await update($, gameOn, () => false)
+        await $.store.set(GAME_ON_KEY, false)
+      }
+      out.push(gap('play', header('play', 'Play', true, false, [{ bg: C.seg, parts: [{ text: ` best ${best} `, color: C.ink }] }], null, off)))
+      const props: PopProps = {
+        colors: { open: C.accent, closing: C.mid, eye: C.onAccent, hole: C.track, sand: C.segAlt, pop: C.warn, miss: C.crit, faint: C.faint, ink: C.ink, warn: C.warn },
+        best,
+        paused: (await read($, planState)) === 'waiting',
+        ending: live === undefined,
+        seed: list.at(-1)?.startedAt ?? 0,
+        cols: width,
+      }
+      out.push(<Client key="game" module="./pop-surface.tsx" props={props} height={GAME_HEIGHT} />)
+    }
     return surface('rail', out)
+  })
+
+  on('command.run', { command: PLAY_COMMAND }, async $ => {
+    const turnedOn = !(await read($, gameOn))
+    await update($, gameOn, () => turnedOn)
+    await $.store.set(GAME_ON_KEY, turnedOn)
+    return { text: turnedOn ? 'Anemone pop on: it shows in the Tide rail while Claude works. Click the open anemones, or press their number.' : 'Anemone pop off.' }
+  })
+
+  // The game posts its score when a round ends or holds; the best is kept across sessions.
+  on('ui.message', async ($, e, next) => {
+    const score = (e.data as { game?: unknown } | null)?.game
+    if (e.requestId === RAIL_ID && typeof score === 'number' && score > (await read($, gameBest))) {
+      await update($, gameBest, () => score)
+      await $.store.set(GAME_BEST_KEY, score)
+    }
+    return next(e)
   })
 
   on('command.run', { command: RAIL_ID }, async $ => {

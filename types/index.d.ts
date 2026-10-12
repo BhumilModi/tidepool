@@ -176,6 +176,9 @@ declare module 'claude-code' {
       // The receipt part the rail's timeline is filtered to (hooks/receipt.ts receiptKey), for one turn; or none.
       railFilter: { turnId: string; key: string } | null
       planState: PlanState
+      // Anemone pop is on (/tidepool-play, kept in the store as `game-on`), and its best score (`game-best`).
+      gameOn: boolean
+      gameBest: number
     }
   }
 }

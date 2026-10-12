@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { FRAME_MS, GAME_HEIGHT, layout, newGame, pop, step } from '../hooks/pop'
+
 // Quiet the rest of the plugin: only the tracker and the rail matter here.
 const OFF = { options: { dock: false, installAssets: false, chrome: false, theme: 'claude' } }
 
@@ -689,4 +691,62 @@ test('the rail shows the turn\'s receipt; pressing a part filters the timeline t
   expect((await ui.find({ type: 'Button', key: 'rc:read' }))?.props.dimColor).toBe(false)
   await ui.press({ key: 'rc:read' })
   expect(await ui.find({ type: 'Button', key: 'row:b1' })).toBeTruthy()
+})
+
+test('anemone pop shows in the rail only when turned on, while a turn runs and a moment after', { options: { ...OFF.options, alerts: false } }, async ($, on) => {
+  const w = world(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const ui = await $.ui.mount(pane())
+  expect(await ui.find({ type: 'Client', key: 'game' })).toBeFalsy()
+  const { text } = await $.command.run({ command: 'tidepool-play', args: '' } as never)
+  expect(text).toContain('Anemone pop on')
+  const client = await ui.find({ type: 'Client', key: 'game' })
+  expect(client?.props.module).toBe('hooks/features/pop-surface.tsx')
+  expect(client?.props.props).toMatchObject({ paused: false, ending: false, best: 0 })
+  // A score posted by the game becomes the best.
+  await ui.post({ game: 42 }, { in: 'game' })
+  expect((await ui.find({ type: 'Client', key: 'game' }))?.props.props).toMatchObject({ best: 42 })
+  await ui.post({ game: 7 }, { in: 'game' })
+  expect((await ui.find({ type: 'Client', key: 'game' }))?.props.props).toMatchObject({ best: 42 })
+  // Claude needs the person: the run holds.
+  await $.classic.Notification({ notification_type: 'permission_prompt', message: 'Claude needs your permission' } as never)
+  expect((await ui.find({ type: 'Client', key: 'game' }))?.props.props).toMatchObject({ paused: true })
+  // The turn ends: the run holds, then folds away.
+  await $.turn.complete(complete('t1'))
+  expect((await ui.find({ type: 'Client', key: 'game' }))?.props.props).toMatchObject({ ending: true })
+  await w.clock.advance(5000)
+  // The rail's one-second timer redraws it in a session; here a fresh mount draws the same moment.
+  await ui.unmount()
+  expect(await (await $.ui.mount(pane())).find({ type: 'Client', key: 'game' })).toBeFalsy()
+  expect((await $.command.run({ command: 'tidepool-play', args: '' } as never)).text).toBe('Anemone pop off.')
+})
+
+test('anemone pop plays in the rail: a click starts a round, a click on an open anemone pops it, its number too', { options: { ...OFF.options, alerts: false } }, async ($, on) => {
+  world(on)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.command.run({ command: 'tidepool-play', args: '' } as never)
+  const ui = await $.ui.mount(pane())
+  await ui.resize({ columns: 44, rows: GAME_HEIGHT, in: 'game' })
+  const tally = async () => (await ui.find({ type: 'Text', text: /best/, in: 'game' }))?.text ?? ''
+  // The same round, played by the pure model beside it: which anemone opens, and when.
+  const seed = ((await ui.find({ type: 'Client', key: 'game' }))?.props.props as { seed: number }).seed
+  let model = pop(newGame(seed, layout(44).length), -1)
+  await ui.pointer({ type: 'down', x: 0, y: 0, button: 'left', in: 'game' })
+  while (!model.holes.some(h => h.until !== undefined && h.until > model.t)) {
+    model = step(model, FRAME_MS)
+    await ui.advance(FRAME_MS)
+  }
+  const i = model.holes.findIndex(h => h.until !== undefined && h.until > model.t)
+  const hole = layout(44)[i]!
+  // The pool starts on the Client's second row, under the hint line.
+  await ui.pointer({ type: 'down', x: hole.x + 2, y: hole.top + 2, button: 'left', in: 'game' })
+  expect(await tally()).toContain('1 · best 1')
+  model = pop(model, i)
+  while (!model.holes.some(h => h.until !== undefined && h.until > model.t)) {
+    model = step(model, FRAME_MS)
+    await ui.advance(FRAME_MS)
+  }
+  const j = model.holes.findIndex(h => h.until !== undefined && h.until > model.t)
+  await ui.key({ key: String(j + 1), in: 'game' })
+  expect(await tally()).toContain('2 · best 2')
 })

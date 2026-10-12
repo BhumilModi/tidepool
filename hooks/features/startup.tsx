@@ -8,6 +8,7 @@ import { opts } from '../options'
 import { palette, terminalName } from '../theme'
 import { encodePowerShell, FONT_FILES, isWindowsRoot, setupGuide, TERMINAL_THEMES, unixTargets, windowsInstallScript } from '../setup'
 import type { InstallOutcome } from '../setup'
+import { GAME_BEST_KEY, GAME_LINGER_MS, GAME_ON_KEY, PLAY_COMMAND } from '../pop'
 import { RESUME_KEY, sessionKey } from '../plan'
 import type { KeptPlans } from '../plan'
 
@@ -17,6 +18,8 @@ const RAIL_ID = 'tidepool-rail'
 const spans = atom({ plugin: 'tidepool', key: 'spans' } as const, [])
 const tasks = atom({ plugin: 'tidepool', key: 'tasks' } as const, [])
 const planState = atom({ plugin: 'tidepool', key: 'planState' } as const, 'running')
+const gameOn = atom({ plugin: 'tidepool', key: 'gameOn' } as const, false)
+const gameBest = atom({ plugin: 'tidepool', key: 'gameBest' } as const, 0)
 const jobs = atom({ plugin: 'tidepool', key: 'jobs' } as const, [])
 const railNow = atom({ plugin: 'tidepool', key: 'railNow' } as const, 0)
 const anchorsSeen = atom({ plugin: 'tidepool', key: 'anchorsSeen' } as const, {})
@@ -53,7 +56,9 @@ async function tickRail($: EngineInterface) {
   }
   const at = await $.clock.now()
   const list = await read($, spans)
-  const isLive = list.some(s => s.endedAt === undefined) || (await read($, jobs)).some(j => j.status === 'running')
+  // The game's section stays a moment after a turn ends: keep redrawing until it folds.
+  const lingering = (await read($, gameOn)) && (list.at(-1)?.endedAt ?? -Infinity) > at - GAME_LINGER_MS - 1000
+  const isLive = list.some(s => s.endedAt === undefined) || lingering || (await read($, jobs)).some(j => j.status === 'running')
   if (isLive) {
     await update($, railNow, () => at)
   }
@@ -155,6 +160,12 @@ export function registerStartup(on: On) {
   on('session.start', async ($, e, next) => {
     await migrateHistory($)
     await restorePlan($)
+    // The game's switch and best score carry across sessions.
+    const kept = await $.store.get(GAME_ON_KEY).catch(() => undefined)
+    const best = await $.store.get(GAME_BEST_KEY).catch(() => undefined)
+    await update($, gameOn, () => kept === true)
+    if (typeof best === 'number') await update($, gameBest, () => best)
+    await $.command.register({ name: PLAY_COMMAND, description: 'Turn anemone pop on or off: a game in the Tide rail while Claude works' })
     // Rail sections the person collapsed stay collapsed across sessions.
     const collapsed = await $.store.get('rail-collapsed').catch(() => undefined)
     if (Array.isArray(collapsed)) {
