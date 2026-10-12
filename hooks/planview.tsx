@@ -1,7 +1,7 @@
 import type { EngineInterface, RenderElement } from 'claude-code'
 
-import type { PlanTask } from '../types'
-import { estimate, fmt, fmtClock, fmtTokens, planStats, timeLeft, topLevel, visibleAgents, windowLines } from './plan'
+import type { PlanState, PlanTask } from '../types'
+import { estimate, fmt, fmtClock, fmtTokens, modelName, planStats, stages, timeLeft, topLevel, visibleAgents, windowLines } from './plan'
 import type { AgentRow } from './plan'
 import { commandKey, shellEta } from './shell'
 import type { ShellRow } from './shell'
@@ -25,6 +25,10 @@ export type PlanData = {
   planHistory: number[]
   now: number
   all: boolean
+  // Waiting on the person or stopped short; absent reads as running.
+  state?: PlanState
+  // Each running agent's tool in flight, by agent id.
+  agentTools?: Record<string, string>
 }
 
 export const MAX_TASK_ROWS = 12
@@ -117,16 +121,23 @@ export function planHeader(
   const top = topLevel(d.tasks)
   const { done, total } = estimate(top, d.now, d.planHistory)
   const finished = total > 0 && done === total
+  // Waiting on the person reads amber, stopped short red; the running stage takes the same colour.
+  const state = finished ? 'running' : (d.state ?? 'running')
+  const tone = state === 'waiting' ? C.warn : state === 'stopped' ? C.crit : C.accent
+  const name = finished ? ' ✓ Plan ' : state === 'waiting' ? ' Plan · needs you ' : state === 'stopped' ? ' Plan · stopped ' : ' Plan '
   const progress = bar(total ? done / total : 0)
+  const parts = stages(top, d.now, d.planHistory)
+  const meter = finished || !parts
+    ? [{ text: progress.filled, color: finished ? C.accent : C.mid }, { text: `${progress.track} `, color: C.track }]
+    : [
+        ...parts.map(p => ({ text: p.text, color: p.part === 'done' ? C.mid : p.part === 'run' ? tone : C.track })),
+        { text: ' ', color: C.track },
+      ]
   const header: Segment[] = [
-    { bg: C.accent, parts: [{ text: finished ? ' ✓ Plan ' : ' Plan ', color: C.onAccent, bold: true }] },
+    { bg: tone, parts: [{ text: name, color: C.onAccent, bold: true }] },
     {
       bg: C.seg,
-      parts: [
-        { text: ` ${done}/${total} `, color: C.ink },
-        { text: progress.filled, color: finished ? C.accent : C.mid },
-        { text: `${progress.track} `, color: C.track },
-      ],
+      parts: [{ text: ` ${done}/${total} `, color: C.ink }, ...meter],
     },
     { bg: C.segAlt, parts: [{ text: ` ${timeLeft(top, d.now, d.planHistory)} `, color: finished ? C.mid : C.ink }] },
   ]
@@ -167,6 +178,8 @@ function drawLine(ui: PlanUi, C: Palette, d: PlanData, line: Line, key: string):
         <Box flexShrink={0}>
           <Text color={isLive ? C.accent : C.track}>{`${line.indent}${mark} `}</Text>
           <Text color={isLive ? C.soft : C.faint}>{a.type}</Text>
+          {a.model && <Text color={C.faint}>{` · ${modelName(a.model)}`}</Text>}
+          {isLive && d.agentTools?.[a.id] && <Text color={C.mid}>{` · ${d.agentTools[a.id]}`}</Text>}
         </Box>
         <Text color={C.faint} wrap="truncate-end">{`  ${a.description}`}</Text>
         <Box flexShrink={0}><Text color={isLive ? C.mid : C.track}>{`  ${meta}`}</Text></Box>

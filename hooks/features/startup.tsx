@@ -3,25 +3,47 @@ import type { EngineInterface, On } from 'claude-code'
 
 import { encodeCells, idleCells, site } from '../dock'
 import { oldStore } from '../migrate'
-import { RAIL_COLUMNS, anchorsOnScreen } from '../rail'
+import { RAIL_COLUMNS, anchorsOnScreen, runningSeen, waitingOn } from '../rail'
 import { opts } from '../options'
 import { palette, terminalName } from '../theme'
 import { encodePowerShell, FONT_FILES, isWindowsRoot, setupGuide, TERMINAL_THEMES, unixTargets, windowsInstallScript } from '../setup'
 import type { InstallOutcome } from '../setup'
+import { RESUME_KEY, sessionKey } from '../plan'
+import type { KeptPlans } from '../plan'
 
 const STATUSLINE = 'tidepool-statusline'
 // The Tide rail (features/rail.tsx): this module owns session.start, so the rail opens here.
 const RAIL_ID = 'tidepool-rail'
 const spans = atom({ plugin: 'tidepool', key: 'spans' } as const, [])
+const tasks = atom({ plugin: 'tidepool', key: 'tasks' } as const, [])
+const planState = atom({ plugin: 'tidepool', key: 'planState' } as const, 'running')
 const jobs = atom({ plugin: 'tidepool', key: 'jobs' } as const, [])
 const railNow = atom({ plugin: 'tidepool', key: 'railNow' } as const, 0)
 const anchorsSeen = atom({ plugin: 'tidepool', key: 'anchorsSeen' } as const, {})
 const railSel = atom({ plugin: 'tidepool', key: 'railSel' } as const, { pinned: false })
 const railCollapsed = atom({ plugin: 'tidepool', key: 'railCollapsed' } as const, [])
 
+// A resumed session gets back the plan it had unfinished (features/tasks.tsx keeps each session's).
+async function restorePlan($: EngineInterface) {
+  try {
+    if ((await read($, tasks)).length > 0) return
+    const kept = ((await $.store.get(RESUME_KEY)) ?? {}) as KeptPlans
+    const plan = kept[sessionKey(await $.session.usage())]
+    if (Array.isArray(plan) && plan.some(t => t.status !== 'completed')) await update($, tasks, () => plan)
+  } catch {
+    // Nothing kept or no usage: the plan starts empty.
+  }
+}
+
 // The rail's live rows grow once a second, only while a turn or a background job runs.
 // The same tick carries the anchors on screen into state; a change means a scroll, which ends a pin.
 async function tickRail($: EngineInterface) {
+  // A call that waited at a permission prompt and is now running had its prompt answered.
+  let answered = false
+  for (const [id, kind] of waitingOn) {
+    if (kind === 'permission' && runningSeen.has(id)) answered = waitingOn.delete(id)
+  }
+  if (answered && waitingOn.size === 0) await update($, planState, s => (s === 'waiting' ? 'running' : s))
   const shown = await read($, anchorsSeen)
   const changed = anchorsOnScreen.size !== Object.keys(shown).length || [...anchorsOnScreen].some(([id, on]) => shown[id] !== on)
   if (changed) {
@@ -29,9 +51,10 @@ async function tickRail($: EngineInterface) {
     await update($, anchorsSeen, () => next)
     await update($, railSel, sel => (sel.pinned ? { ...sel, pinned: false } : sel))
   }
-  const isLive = (await read($, spans)).some(s => s.endedAt === undefined) || (await read($, jobs)).some(j => j.status === 'running')
+  const at = await $.clock.now()
+  const list = await read($, spans)
+  const isLive = list.some(s => s.endedAt === undefined) || (await read($, jobs)).some(j => j.status === 'running')
   if (isLive) {
-    const at = await $.clock.now()
     await update($, railNow, () => at)
   }
 }
@@ -131,6 +154,7 @@ async function migrateHistory($: EngineInterface): Promise<void> {
 export function registerStartup(on: On) {
   on('session.start', async ($, e, next) => {
     await migrateHistory($)
+    await restorePlan($)
     // Rail sections the person collapsed stay collapsed across sessions.
     const collapsed = await $.store.get('rail-collapsed').catch(() => undefined)
     if (Array.isArray(collapsed)) {

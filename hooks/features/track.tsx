@@ -7,8 +7,8 @@ import { travelled } from '../dock'
 import { addJob, endJob, parseNotifications } from '../jobs'
 import { commandKey, parseHistory, parseOutputPath, recordRun } from '../shell'
 import { addCall, closeSpan, closeTurn, endCall, totalTokens } from '../timing'
-import { callDetail } from '../rail'
-import { currentTaskId } from '../plan'
+import { callDetail, runningSeen, waitingOn } from '../rail'
+import { currentTaskId, topLevel } from '../plan'
 import { describeCall, editStats } from '../tools'
 import { cutPatch, editPatch } from '../files'
 import type { Hunk } from '../../types'
@@ -31,6 +31,15 @@ const chat = atom({ plugin: 'tidepool', key: 'chat' } as const, 0)
 const diffFile = atom({ plugin: 'tidepool', key: 'diffFile' } as const, null)
 // The plan (features/tasks.tsx): a main-loop call records the task running when it starts.
 const tasks = atom({ plugin: 'tidepool', key: 'tasks' } as const, [])
+const planState = atom({ plugin: 'tidepool', key: 'planState' } as const, 'running')
+
+// A call that waited on the person has returned: its wait is over.
+async function stopWaiting($: EngineInterface, id: string) {
+  waitingOn.delete(id)
+  runningSeen.delete(id)
+  // A permission prompt no call was matched to (alerts.tsx sets it from the notification) clears with any return.
+  if (waitingOn.size === 0) await update($, planState, s => (s === 'waiting' ? 'running' : s))
+}
 // Past shell durations by command (read by the band in features/tasks.tsx), kept in the store across sessions.
 const shellHistory = atom({ plugin: 'tidepool', key: 'shellHistory' } as const, null)
 
@@ -112,6 +121,11 @@ export function registerTrack(on: On) {
     let detail: string[] = []
     // An Edit or Write's change, for the rail's files section (hooks/files.ts).
     let edit: { file: string; patch: Hunk[]; patchCut?: number } | undefined
+    // A question to the person holds the plan amber until it is answered (see finally).
+    if (tool === 'AskUserQuestion') {
+      waitingOn.set(id, 'question')
+      await update($, planState, () => 'waiting')
+    }
     try {
       const ran = await next(e)
       failed = ran.isError === true
@@ -145,6 +159,7 @@ export function registerTrack(on: On) {
       }
       return ran
     } finally {
+      await stopWaiting($, id)
       await update($, live, map => {
         const { [id]: _done, ...rest } = map
         return rest
@@ -161,6 +176,17 @@ export function registerTrack(on: On) {
         await saveShellRun($, input.command, at - startedAt)
       }
     }
+  })
+
+  // A permission prompt names the tool and input, not the call: the call in flight with both is the one waiting.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    const asked = JSON.stringify(e.tool_input)
+    const id = Object.entries(await read($, live)).find(([, c]) => c.tool === e.tool_name && JSON.stringify(c.input) === asked)?.[0]
+    if (id !== undefined) {
+      waitingOn.set(id, 'permission')
+      await update($, planState, () => 'waiting')
+    }
+    return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -183,6 +209,9 @@ export function registerTrack(on: On) {
       const level = await gauges($)
       const aborted = e.isAborted || e.reason === 'aborted'
       await update($, spans, list => closeSpan(list, { at, ...level, aborted }))
+      // Ended on an error or Esc with tasks left: the plan reads stopped until the next turn starts.
+      const unfinished = topLevel(await read($, tasks)).some(t => t.status !== 'completed')
+      await update($, planState, () => ((aborted || e.reason === 'error') && unfinished ? 'stopped' : 'running'))
     }
     const u = done.usage ?? e.usage
     const usage = u && { input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens }

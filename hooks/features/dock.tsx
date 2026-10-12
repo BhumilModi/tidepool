@@ -13,6 +13,7 @@ const dock = atom({ plugin: 'tidepool', key: 'dock' } as const, null)
 const tick = atom({ plugin: 'tidepool', key: 'tick' } as const, 0)
 // The rail's turns (features/track.tsx closes them): this module owns turn.start, so it opens them.
 const spans = atom({ plugin: 'tidepool', key: 'spans' } as const, [])
+const planState = atom({ plugin: 'tidepool', key: 'planState' } as const, 'running')
 
 // Context % and session cost at turn start; the tracker reads the same at turn end.
 async function gauges($: EngineInterface): Promise<{ ctx?: number; cost?: number }> {
@@ -94,6 +95,8 @@ async function frame($: EngineInterface, own: { t?: Timer }) {
 export function registerDock(on: On) {
   on('turn.start', async ($, e, next) => {
     const started = await next(e)
+    // A new turn picks a stopped plan back up.
+    await update($, planState, () => 'running')
     const at = await $.clock.now()
     const level = await gauges($)
     await update($, spans, list => openSpan(list, { turnId: e.turnId, at, prompt: promptLabel(e.text), ...level }))

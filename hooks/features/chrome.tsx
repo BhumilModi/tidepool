@@ -1,6 +1,7 @@
 import type { On } from 'claude-code'
 
 import { opts } from '../options'
+import { runningSeen } from '../rail'
 import { palette } from '../theme'
 
 // The hint line under the prompt stays the engine's: a tree or a rewritten hint replaces its live pills.
@@ -32,6 +33,8 @@ export function registerChrome(on: On) {
   })
 
   on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
+    // A call drawn with progress is running: if it waited at a permission prompt, the person said yes.
+    runningSeen.add(e.props.tool_use_id)
     if (!opts.chrome || e.props.kind !== 'background_hint' || e.props.hint === '') return next(e)
     const { Text } = $.ui.resolve(e)
     return <Text color={palette().faint} wrap="truncate-end">{`⇣ ${e.props.hint.replace(/^\((.*)\)$/, '$1')}`}</Text>

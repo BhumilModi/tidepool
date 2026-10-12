@@ -1,4 +1,4 @@
-import type { PlanAgent, PlanTask, TurnRecord } from '../types'
+import type { LiveCall, PlanAgent, PlanTask, TurnRecord } from '../types'
 import { totalTokens } from './timing'
 
 type Status = PlanTask['status']
@@ -68,7 +68,56 @@ export function estimate(tasks: PlanTask[], now: number, history: number[] = [])
   const first = Math.min(...tasks.map(t => t.startedAt ?? t.createdAt))
   // A finished plan stops at its last task's finish; otherwise the clock runs to now.
   const end = done === tasks.length ? Math.max(...tasks.map(t => t.doneAt ?? first)) : now
-  return { done, total: tasks.length, msLeft, elapsed: end - first, fromPastOnly: done === 0 && prior !== undefined }
+  return { done, total: tasks.length, msLeft, elapsed: end - first, fromPastOnly: done === 0 && prior !== undefined, avg }
+}
+
+export type Stage = { text: string; part: 'done' | 'run' | 'todo' | 'gap' }
+
+// The bar split into one stage per top-level task, a blank cell between stages: done stages full, the running one
+// filled by its elapsed over the average task (held short of full), the rest track. Undefined when the tasks do not
+// fit two cells each; the caller draws the plain bar.
+export function stages(tasks: PlanTask[], now: number, history: number[] = [], min = 12, max = 24): Stage[] | undefined {
+  const n = tasks.length
+  // Two cells a stage and a gap between, widening past `min` up to `max` for longer plans.
+  const width = Math.max(min, n * 3 - 1)
+  const cells = width - (n - 1)
+  if (n === 0 || width > max) return undefined
+  const { avg } = estimate(tasks, now, history)
+  const out: Stage[] = []
+  tasks.forEach((t, i) => {
+    const w = Math.floor((cells * (i + 1)) / n) - Math.floor((cells * i) / n)
+    if (i > 0) out.push({ text: ' ', part: 'gap' })
+    if (t.status === 'completed') return out.push({ text: '━'.repeat(w), part: 'done' })
+    if (t.status === 'pending') return out.push({ text: '─'.repeat(w), part: 'todo' })
+    const ran = avg ? Math.min(0.9, (now - (t.startedAt ?? now)) / avg) : 0
+    // Held at least a half cell short of full: a full stage reads as done.
+    const units = Math.min(w * 2 - 1, Math.max(1, Math.round(ran * w * 2)))
+    const full = units >> 1
+    const filled = '━'.repeat(full) + (units % 2 ? '╸' : '')
+    out.push({ text: filled, part: 'run' }, { text: '─'.repeat(w - filled.length), part: 'todo' })
+  })
+  return out.filter(s => s.text !== '')
+}
+
+// Each agent's tool in flight, by agent id: the last one listed when it runs several.
+export function agentTools(live: Record<string, LiveCall>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const c of Object.values(live)) if (c.agentId !== undefined) out[c.agentId] = c.tool
+  return out
+}
+
+// Store key for each session's plan, kept so a resumed session gets it back: keyed by the session's first launch
+// (`$.session.usage().startedAt`), which a resume keeps.
+export const RESUME_KEY = 'plans-by-session'
+export const sessionKey = (usage: { startedAt: number }) => String(usage.startedAt)
+export type KeptPlans = Record<string, PlanTask[]>
+
+// What the model reads after an approved plan: track it as tasks, so the plan band draws it.
+export const PLAN_NUDGE = 'Before starting, track this plan with TaskCreate: one task per step, in order. Mark each in_progress when you start it and completed when it is done.'
+
+// A model id's family, for a row: `claude-haiku-4-5` reads `haiku`; anything else as given.
+export function modelName(model: string | undefined): string | undefined {
+  return model?.match(/opus|sonnet|haiku|fable/i)?.[0]?.toLowerCase() ?? model
 }
 
 export function fmt(ms: number): string {

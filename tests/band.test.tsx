@@ -20,7 +20,7 @@ test('band lists tasks once a plan starts', { options: { powerline: true } }, as
     const ui = await $.ui.mount({ plugin: 'tidepool', surface, ...BAND })
     const text = (await ui.findAll({ type: 'Text' })).map(t => t.text).join('')
     expect(text).toContain(' Plan ')
-    expect(text).toContain(' 1/2 ━━━━━━──────')
+    expect(text).toContain(' 1/2 ━━━━━ ╸─────')
     expect(text).toContain(' ~10m left ')
     expect(text).toContain('✓ 1. schema  10m')
     expect(text).toContain('▶ 2. routes  0s')
@@ -86,13 +86,13 @@ test('agents nest under the running task and fold away after finishing', async (
     provider: { plugin: 'engine', tier: 'core' }, parentModel: 'claude-opus-5-5', background: true, fork: false,
   })
   await clock.advance(167_000)
-  expect(await text()).toContain('◆ general-purpose  Running engine tests  2m 47s')
+  expect(await text()).toContain('◆ general-purpose · sonnet  Running engine tests  2m 47s')
 
   await $.turn.complete({
     answer: 'done', durationMs: 1, isAborted: false, turnId: 't', agentId: 'ag1', reason: 'answer',
     usage: { model: 'm', input_tokens: 100_000, output_tokens: 1_100, cache_read_input_tokens: 95_000, cache_creation_input_tokens: 0 },
   })
-  expect(await text()).toContain('✓ general-purpose  Running engine tests  2m 47s · 196.1k tokens')
+  expect(await text()).toContain('✓ general-purpose · sonnet  Running engine tests  2m 47s · 196.1k tokens')
 
   await clock.advance(31_000)
   expect(await text()).not.toContain('general-purpose')

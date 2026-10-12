@@ -1,7 +1,10 @@
+import { atom, update } from 'claude-code'
 import type { On } from 'claude-code'
 
 import { opts } from '../options'
 import { fmtTurn } from '../receipt'
+
+const planState = atom({ plugin: 'tidepool', key: 'planState' } as const, 'running')
 
 export function registerAlerts(on: On) {
   // Matched on reason, so the tracker keeps the one unmatched turn.complete hook.
@@ -20,6 +23,8 @@ export function registerAlerts(on: On) {
   }
 
   on('classic.Notification', async ($, e, next) => {
+    // A permission prompt holds the plan amber until its call returns (features/track.tsx).
+    if (e.notification_type === 'permission_prompt') await update($, planState, () => 'waiting')
     // The idle reminder follows every long turn; the finish chime already covered it.
     if (opts.alerts && e.notification_type !== 'idle_prompt') {
       void $.audio.play({ asset: 'sounds/attention.wav' }).catch(() => {})

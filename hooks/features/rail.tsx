@@ -3,7 +3,7 @@ import type { EngineInterface, Frozen, On, RenderChildren, RenderElement, Render
 
 import type { RailRow } from '../../types'
 import { opts } from '../options'
-import { agentRows, finishedAt, historyFor, planShows, topLevel } from '../plan'
+import { agentRows, agentTools, finishedAt, historyFor, planShows, topLevel } from '../plan'
 import { doneCard, planBody, planHeader, planLines } from '../planview'
 import { DONE_COLS, DONE_ROWS, doneCrabCells, encodeCells } from '../dock'
 import type { PlanData } from '../planview'
@@ -42,6 +42,7 @@ const tick = atom({ plugin: 'tidepool', key: 'tick' } as const, 0)
 // the diff pane shows.
 const railCollapsed = atom({ plugin: 'tidepool', key: 'railCollapsed' } as const, [])
 const diffFile = atom({ plugin: 'tidepool', key: 'diffFile' } as const, null)
+const planState = atom({ plugin: 'tidepool', key: 'planState' } as const, 'running')
 const railFilter = atom({ plugin: 'tidepool', key: 'railFilter' } as const, null)
 
 const TOOL = 6
@@ -93,6 +94,8 @@ async function planData($: EngineInterface, shown: ReadonlySet<string>) {
     planHistory: historyFor(await $.store.get('history-by-project'), await $.session.root()),
     now: at,
     all: await read($, planAll),
+    state: await read($, planState),
+    agentTools: agentTools(await read($, live)),
   }
   const ask = finished ? DONE_ROWS : planLines(d).lines.length
   return { d, list, at, doneAt: finished ? doneAt : undefined, showTasks, ask }

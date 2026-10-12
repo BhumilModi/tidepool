@@ -2,9 +2,14 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Frozen, On, RenderElement, RenderInput, Timer, ToolCallInput } from 'claude-code'
 
 import type { PlanAgent, PlanTask } from '../../types'
+import type { KeptPlans } from '../plan'
 import {
   AGENT_LINGER_MS,
+  PLAN_NUDGE,
+  RESUME_KEY,
+  sessionKey,
   agentRows,
+  agentTools,
   currentTaskId,
   fmtClock,
   fmtTokens,
@@ -44,6 +49,10 @@ const jobs = atom({ plugin: 'tidepool', key: 'jobs' } as const, [])
 const shellHistory = atom({ plugin: 'tidepool', key: 'shellHistory' } as const, null)
 // Every plan row, or only what fits beside the dock; toggled from the Plan header.
 const planAll = atom({ plugin: 'tidepool', key: 'planAll' } as const, false)
+const planState = atom({ plugin: 'tidepool', key: 'planState' } as const, 'running')
+
+// Sessions whose plan is kept for a resume (features/startup.tsx restores it): the newest few.
+const RESUME_KEEP = 20
 
 let ticker: Timer | undefined
 
@@ -98,6 +107,20 @@ function playDone($: EngineInterface, doneAt: number) {
   })
 }
 
+// Mirrors the plan to the store for a resume. A convenience: a failure here never stops the plan.
+// It writes the plan as it stands now, so task calls finishing out of order never keep an older list.
+async function keepForResume($: EngineInterface) {
+  try {
+    const list = await read($, tasks)
+    const session = sessionKey(await $.session.usage())
+    const kept = ((await $.store.get(RESUME_KEY)) ?? {}) as KeptPlans
+    const { [session]: _old, ...others } = kept
+    await $.store.set(RESUME_KEY, Object.fromEntries([...Object.entries(others).slice(-(RESUME_KEEP - 1)), [session, list]]))
+  } catch {
+    // No usage or store: the plan is not kept for a resume.
+  }
+}
+
 // Applies `change` to the latest list inside the update: task calls sent together run side by side, and a
 // read-then-write would let one overwrite the other.
 async function apply($: EngineInterface, change: (list: PlanTask[]) => PlanTask[]) {
@@ -108,6 +131,7 @@ async function apply($: EngineInterface, change: (list: PlanTask[]) => PlanTask[
     after = change(list)
     return after
   })
+  await keepForResume($)
   const doneAt = finishedAt(topLevel(after))
   if (opts.rail && finishedAt(topLevel(before)) === undefined && doneAt !== undefined) playDone($, doneAt)
   const finished = newlyDone(topLevel(before), topLevel(after))
@@ -199,6 +223,16 @@ export function registerTasks(on: On) {
     return next(e)
   })
 
+  // An approved plan-mode plan becomes the band's plan: the model is asked to track it as tasks.
+  on('tool.call', { tool: 'ExitPlanMode' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (!opts.tasks || ran.deny !== undefined || ran.isError) return ran
+    if (topLevel(await read($, tasks)).some(t => t.status !== 'completed')) return ran
+    // A result with `ref` is replayed as core produced it; without it, core maps the result anew with our context.
+    const { ref: _ref, ...rest } = ran
+    return { ...rest, context: [...(ran.context ?? []), PLAN_NUDGE] }
+  })
+
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
     if (spawned.deny !== undefined) return spawned
@@ -209,6 +243,7 @@ export function registerTasks(on: On) {
       taskId: currentTaskId(await read($, tasks)),
       startedAt: await $.clock.now(),
       callId: e.tool_use_id,
+      ...(spawned.model ? { model: spawned.model } : {}),
     }
     await update($, agents, list => [...list, agent].slice(-50))
     await syncTicker($)
@@ -289,6 +324,8 @@ async function planBand($: EngineInterface, e: Band, dockKind: 'none' | 'idle' |
     planHistory: historyFor(await loadHistory($), await $.session.root()),
     now,
     all: await read($, planAll),
+    state: await read($, planState),
+    agentTools: agentTools(await read($, liveCalls)),
   }
   const want = docked ? { plan: 0, shell: 0, tails: 0, focus: false } : planWanted(d)
   const fit = fitBand({

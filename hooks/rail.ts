@@ -5,6 +5,15 @@ import type { CallTiming, Job, PlanAgent, RailRow, RailSummary, TurnSpan } from 
 // ponytail: the rail follows a scroll within a second, not on the same frame.
 export const anchorsOnScreen = new Map<string, boolean>()
 
+// The calls waiting on the person: a question, or a call held at a permission prompt (features/track.tsx). The
+// plan reads amber while any waits; only those calls clear it, not another call finishing beside them.
+export const waitingOn = new Map<string, 'question' | 'permission'>()
+// Calls the engine has drawn as running: a Bash call's background hint (features/chrome.tsx) shows only once it
+// runs, so its permission was granted. Recorded while drawing; the one-second timer (features/startup.tsx) clears
+// those calls' waits, as with anchorsOnScreen above.
+// ponytail: a granted call of another tool keeps the amber until it returns; most return within seconds.
+export const runningSeen = new Set<string>()
+
 // Where the surface last seated the rail, recorded by its Pane render (a module value, as above): tool rows
 // hand over to the rail only while it is docked beside the transcript.
 export const railSeat: { placement?: 'dock' | 'inline' } = {}

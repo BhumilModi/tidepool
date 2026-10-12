@@ -24,7 +24,12 @@ export type PlanAgent = {
   stopped?: boolean
   // The Agent call that spawned it: the rail row it shows on.
   callId?: string
+  // The model it runs on, as the spawn resolved it.
+  model?: string
 }
+
+// How the plan stands beside running and done: waiting on the person, or stopped with tasks unfinished.
+export type PlanState = 'running' | 'waiting' | 'stopped'
 
 // A tool call in flight, as the spinner reads it.
 export type LiveCall = { tool: string; input: Record<string, unknown>; agentId?: string }
@@ -170,6 +175,7 @@ declare module 'claude-code' {
       diffFile: { turnId: string; path: string } | null
       // The receipt part the rail's timeline is filtered to (hooks/receipt.ts receiptKey), for one turn; or none.
       railFilter: { turnId: string; key: string } | null
+      planState: PlanState
     }
   }
 }
