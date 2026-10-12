@@ -4,6 +4,7 @@ import type { EngineInterface, On } from 'claude-code'
 import type { TurnSpan } from '../../types'
 import { opts } from '../options'
 import { anchorOf, anchorsOnScreen, pickTurn, railRows, railSeat, turnOfCall } from '../rail'
+import { receipt, receiptLine } from '../receipt'
 import { palette } from '../theme'
 import { describeCall, editStats, fmtShort, groupSummary, isKnownTool } from '../tools'
 
@@ -38,6 +39,9 @@ async function sessionRoot($: EngineInterface): Promise<string> {
   return root
 }
 
+// Cells the anchor keeps beside its receipt: the leading ` ◇ `, `  ▸ rail ` and the chat's own margin.
+const ANCHOR_TAIL = 16
+
 export function registerTools(on: On) {
   // Header row only: the engine keeps drawing the result (diff, output) under it.
   // marginTop keeps the blank line the engine puts above each tool call.
@@ -56,22 +60,20 @@ export function registerTools(on: On) {
       if (p.onScreen !== undefined) anchorsOnScreen.set(turn.turnId, p.onScreen !== null)
       const C = palette()
       const tools = rows.reduce((n, r) => n + 1 + (r.children ?? 0), 0)
-      const agentCount = rows.filter(r => r.kind === 'agent').length
-      const background = rows.filter(r => r.kind === 'job').length
       const errors = rows.filter(r => r.failed).length
       const live = turn.endedAt === undefined
-      const parts = [
-        `${tools} tool${tools === 1 ? '' : 's'}`,
-        agentCount ? `${agentCount} agent${agentCount === 1 ? '' : 's'}` : '',
-        background ? `${background} background` : '',
-        `${fmtShort((turn.endedAt ?? now) - turn.startedAt)}${live ? ' …' : ''}`,
-      ].filter(Boolean)
+      // The receipt: what the turn opened and changed (hooks/receipt.ts); a turn of only plan tools counts its tools.
+      const opened = receipt(rows)
+      const parts = opened.length ? opened : [{ key: 'tools', text: `${tools} tool${tools === 1 ? '' : 's'}` }]
+      const took = `${fmtShort((turn.endedAt ?? now) - turn.startedAt)}${live ? ' …' : ''}`
+      // Room for the line beside the error count and `▸ rail`; parts that do not fit drop whole, from the end.
+      const line = receiptLine(parts, took, (e.viewport?.columns ?? 100) - ANCHOR_TAIL - (errors ? ` · ${errors} errors`.length : 0))
       const pin = () => update($, railSel, () => ({ turnId: turn.turnId, pinned: true }))
       // The turn the rail is showing reads in accent on a faint band; pointing at it lights the rail's turn line too.
       const isShown = pickTurn(await read($, spans), await read($, railSel), await read($, anchorsSeen))?.turnId === turn.turnId
       return (
         <Box marginTop={1} flexDirection="row" height={1} backgroundColor={isShown ? C.seg : undefined} hover={{ scope: `tidepool-turn-${turn.turnId}`, backgroundColor: C.seg }}>
-          <Text color={isShown ? C.soft : C.faint} wrap="truncate-end">{` ◇ ${parts.join(' · ')}`}</Text>
+          <Text color={isShown ? C.soft : C.faint} wrap="truncate-end">{` ◇ ${line}`}</Text>
           {errors > 0 && (
             <Box flexShrink={0}>
               <Text color={C.crit}>{` · ${errors} error${errors === 1 ? '' : 's'}`}</Text>

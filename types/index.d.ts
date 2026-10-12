@@ -168,6 +168,8 @@ declare module 'claude-code' {
       railCollapsed: ('timeline' | 'plan' | 'files')[]
       // The file the diff pane shows: a turn's id and the file's absolute path.
       diffFile: { turnId: string; path: string } | null
+      // The receipt part the rail's timeline is filtered to (hooks/receipt.ts receiptKey), for one turn; or none.
+      railFilter: { turnId: string; key: string } | null
     }
   }
 }

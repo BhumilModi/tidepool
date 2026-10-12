@@ -79,7 +79,8 @@ test('first tool row of a turn draws the anchor; the rest draw nothing', OFF, as
   await threeCalls($, w)
   await docked($)
   const first = await textOf(await $.ui.mount(row('r1', 'Read', { file_path: '/repo/a.ts' })))
-  expect(first).toContain('◇ 3 tools')
+  // The failed Bash opened nothing: it shows in the error count, not the receipt.
+  expect(first).toContain('◇ 2 read · ')
   expect(first).toContain('▸ rail')
   expect(await textOf(await $.ui.mount(row('r2', 'Read', { file_path: '/repo/b.ts' })))).toBe('')
   const result = await $.ui.mount({ plugin: 'tidepool', surface: 'terminal', component: 'ToolResult', requestId: 'r1', props: { tool_use_id: 'r1', tool: 'Read', output: {}, isErrored: false } } as never)
@@ -104,7 +105,8 @@ test('anchor names agents and background jobs', OFF, async ($, on) => {
   await docked($)
   const text = await textOf(await $.ui.mount(row('tu1', 'Agent', { description: 'Explore' })))
   expect(text).toContain('1 agent')
-  expect(text).toContain('1 background')
+  // A background shell is a shell in the receipt.
+  expect(text).toContain('1 shell')
 })
 
 test('pressing the anchor pins its turn in the rail', OFF, async ($, on) => {
@@ -174,7 +176,7 @@ test('a turn whose first call draws no row still gets an anchor', OFF, async ($,
   await call($, w, 'td1', 'TodoWrite', { todos: [] }, 50)
   await call($, w, 'r1', 'Read', { file_path: '/repo/a.ts' }, 100)
   await docked($)
-  expect(await textOf(await $.ui.mount(row('r1', 'Read', { file_path: '/repo/a.ts' })))).toContain('◇ 2 tools')
+  expect(await textOf(await $.ui.mount(row('r1', 'Read', { file_path: '/repo/a.ts' })))).toContain('◇ 1 read')
 })
 
 test('tool rows ask the engine nothing on each render', OFF, async ($, on) => {

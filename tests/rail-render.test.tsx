@@ -18,6 +18,7 @@ function world(on: any, stored?: Record<string, unknown>) {
   on('session.root', () => ({ value: '/repo' }))
   on('turn.start', (_$: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: 'ok' }))
+  on('classic.Notification', () => ({}))
   on('prompt.submit', (_$: unknown, e: { text: string }) => ({ text: e.text }))
   on('agent.spawn', () => ({ model: 'm', agentId: 'ag1' }))
   on('tool.call', async (_$: unknown, e: { tool_use_id: string }) => {
@@ -152,7 +153,8 @@ test('a turn with no tools says so', OFF, async ($, on) => {
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await $.turn.complete(complete('t1'))
   const ui = await $.ui.mount(pane())
-  expect(await textOf(ui)).toContain('no tools this turn')
+  expect(await textOf(ui)).toContain('from memory')
+  expect(await textOf(ui)).toContain('nothing opened')
 })
 
 test('a background shell runs past its turn until its notification ends it', OFF, async ($, on) => {
@@ -506,6 +508,8 @@ test('pressing a file opens the diff pane with its edits', OFF, async ($, on) =>
   const ui = await $.ui.mount(pane())
   await ui.press({ key: 'file:/repo/src/a.ts' })
   expect(w.opened.map(o => [o.id, o.title])).toContainEqual(['tidepool-diff', 'src/a.ts'])
+  // Same width as the rail, so switching tabs never resizes the dock under the pointer.
+  expect((w.opened.find(o => o.id === 'tidepool-diff') as { columns?: number } | undefined)?.columns).toBe(44)
   const diff = await $.ui.mount(diffPane)
   // Same width as the rail, so switching tabs never resizes the dock under the pointer.
   expect((w.opened.find(o => o.id === 'tidepool-diff') as { columns?: number } | undefined)?.columns).toBe(44)
@@ -668,4 +672,21 @@ test('the diff pane names its file and closes itself alone, back to the rail', O
   expect((await diff.findAll({ type: 'Text' })).some((t: any) => t.text.includes('src/a.ts'))).toBe(true)
   await diff.press({ key: 'diff:close' })
   expect(w.closed).toEqual(['tidepool-diff'])
+})
+
+test('the rail shows the turn\'s receipt; pressing a part filters the timeline to it, again clears it', OFF, async ($, on) => {
+  const w = world(on)
+  await twoCallTurn($, w)
+  const ui = await $.ui.mount(pane())
+  const read = await ui.find({ type: 'Button', key: 'rc:read' })
+  expect(read?.text).toBe('1 read')
+  // The failed Bash opened nothing, so it has no part of its own.
+  expect(await ui.find({ type: 'Button', key: 'rc:shell' })).toBeFalsy()
+  expect(await ui.find({ type: 'Button', key: 'row:b1' })).toBeTruthy()
+  await ui.press({ key: 'rc:read' })
+  expect(await ui.find({ type: 'Button', key: 'row:r1' })).toBeTruthy()
+  expect(await ui.find({ type: 'Button', key: 'row:b1' })).toBeFalsy()
+  expect((await ui.find({ type: 'Button', key: 'rc:read' }))?.props.dimColor).toBe(false)
+  await ui.press({ key: 'rc:read' })
+  expect(await ui.find({ type: 'Button', key: 'row:b1' })).toBeTruthy()
 })

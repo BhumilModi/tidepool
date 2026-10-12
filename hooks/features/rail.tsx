@@ -8,6 +8,7 @@ import { doneCard, planBody, planHeader, planLines } from '../planview'
 import { DONE_COLS, DONE_ROWS, doneCrabCells, encodeCells } from '../dock'
 import type { PlanData } from '../planview'
 import { MAX_TAIL_BYTES, shellRows, shellTails } from '../shell'
+import { receipt, receiptKey } from '../receipt'
 import { RAIL_COLUMNS, pickTurn, railRows, railSeat, railSummary, sections, showBars, turnOfCall, turnWindow } from '../rail'
 import type { SectionName } from '../rail'
 import { diffEdits, fileRows, relPath } from '../files'
@@ -41,6 +42,7 @@ const tick = atom({ plugin: 'tidepool', key: 'tick' } as const, 0)
 // the diff pane shows.
 const railCollapsed = atom({ plugin: 'tidepool', key: 'railCollapsed' } as const, [])
 const diffFile = atom({ plugin: 'tidepool', key: 'diffFile' } as const, null)
+const railFilter = atom({ plugin: 'tidepool', key: 'railFilter' } as const, null)
 
 const TOOL = 6
 const META = 13
@@ -97,6 +99,7 @@ async function planData($: EngineInterface, shown: ReadonlySet<string>) {
 }
 
 // Shows a file's diff for a turn in the diff pane, opening it or re-targeting the open one.
+// It asks the rail's width: the dock sizes to the tab shown, so a wider diff moved the tab row under the pointer.
 async function openDiff($: EngineInterface, turnId: string, path: string, title: string) {
   await update($, diffFile, () => ({ turnId, path }))
   await $.ui.open({ id: DIFF_ID, title, columns: RAIL_COLUMNS })
@@ -205,6 +208,12 @@ export function registerRail(on: On) {
     const allCalls = await read($, calls)
     const all = turn ? railRows(allCalls, await read($, agents), await read($, jobs), turn, clock) : []
     const opened = await read($, open)
+    // The turn's receipt; pressing one of its parts filters the timeline to that kind, pressing it again clears it.
+    const parts = receipt(all)
+    // The filter belongs to the turn it was chosen on.
+    const chosen = await read($, railFilter)
+    const filter = chosen && chosen.turnId === turn?.turnId && parts.some(part => part.key === chosen.key) ? chosen.key : null
+    const shownRows = filter ? all.filter(r => receiptKey(r.tool) === filter) : all
     const bars = showBars(p.bodyColumns)
     const col = columns(width, bars)
     const state = !turn ? '' : turn.endedAt === undefined ? 'live' : turn.aborted ? 'stopped' : ''
@@ -213,13 +222,13 @@ export function registerRail(on: On) {
     // The turn's tool rows, the last `room` rows of them: an "earlier" marker and the axis count in `room`.
     const toolRows = async (room: number) => {
       const body: RenderElement[] = []
-      if (all.length === 0) return [<Text key="empty" color={C.faint}>no tools this turn</Text>]
+      if (all.length === 0) return [<Text key="empty" color={C.faint}>nothing opened</Text>]
       const axis = bars ? 1 : 0
-      const fitsAll = all.length + axis <= room
-      const count = fitsAll ? all.length : Math.max(0, room - 1 - axis)
-      const hidden = all.length - count
+      const fitsAll = shownRows.length + axis <= room
+      const count = fitsAll ? shownRows.length : Math.max(0, room - 1 - axis)
+      const hidden = shownRows.length - count
       if (hidden) body.push(<Text key="earlier" color={C.faint}>{`${' '.repeat(TOOL + 1)}${hidden} earlier`}</Text>)
-      for (const r of all.slice(hidden)) {
+      for (const r of shownRows.slice(hidden)) {
         const color = r.failed ? C.crit : r.kind === 'job' ? C.warn : r.kind === 'agent' ? C.info : r.running ? C.mid : C.soft
         const b = bars ? span(r.from, r.to, col.bar) : { before: '', filled: '', after: '' }
         const isOpen = opened.includes(r.id)
@@ -284,6 +293,24 @@ export function registerRail(on: On) {
         </Box>
       )
 
+    // The receipt as a row of pressable parts, as many as fit whole; dim but for the part filtered to.
+    const receiptRow = () => {
+      const fitted: typeof parts = []
+      for (const part of parts) {
+        if ([...fitted, part].map(x => x.text).join(' · ').length > width) break
+        fitted.push(part)
+      }
+      const pick = (key: string) => update($, railFilter, () => (filter === key || !turn ? null : { turnId: turn.turnId, key }))
+      return (
+        <Box key="receipt" flexDirection="row" height={1}>
+          {fitted.flatMap((part, i) => [
+            i > 0 ? <Text key={`rs${i}`} color={C.faint}>{' · '}</Text> : null,
+            <Button key={`rc:${part.key}`} plain dimColor={filter !== part.key} onPress={() => pick(part.key)}>{part.text}</Button>,
+          ])}
+        </Box>
+      )
+    }
+
     if (isInline) {
       // Above the prompt the rail follows the live turn: its last few rows, no sections.
       return surface('rail', [brand, <Box key="title">{turnLine('')}</Box>, <Box key="rows" flexDirection="column" marginTop={1}>{await toolRows(INLINE_ROWS + 1 + (bars ? 1 : 0))}</Box>])
@@ -331,9 +358,10 @@ export function registerRail(on: On) {
     const files = fileRows(Object.entries(allCalls).filter(([id]) => turnIds.has(id)).sort(([, x], [, y]) => x.startedAt - y.startedAt), root)
     // The turn's prompt, on one row, or two when it does not fit one; a longer prompt is cut at the end of the second.
     const promptRows = !turn?.prompt ? 0 : turn.prompt.length <= width ? 1 : PROMPT_ROWS
+    const receiptRows = parts.length ? 1 : 0
     const rows = sections({
       bodyRows: p.scroll.bodyRows,
-      asks: { timeline: turn ? promptRows + (all.length === 0 ? 1 : all.length + (bars ? 1 : 0)) : 0, plan: plan?.ask ?? 0, files: files.length },
+      asks: { timeline: turn ? promptRows + receiptRows + (all.length === 0 ? 1 : shownRows.length + (bars ? 1 : 0)) : 0, plan: plan?.ask ?? 0, files: files.length },
       open: { timeline: !collapsed.includes('timeline'), plan: !collapsed.includes('plan'), files: !collapsed.includes('files') },
       all: showAll,
     })
@@ -351,6 +379,8 @@ export function registerRail(on: On) {
           { bg: C.seg, parts: [{ text: ` turn ${list.indexOf(turn) + 1} `, color: C.ink }] },
           ...(state === 'live' ? [{ bg: C.seg, parts: [{ text: '● live ', color: C.accent }] }] : []),
           ...(state === 'stopped' ? [{ bg: C.seg, parts: [{ text: 'stopped ', color: C.warn }] }] : []),
+          // A finished turn that opened nothing answered from what Claude already had.
+          ...(state === '' && all.length === 0 ? [{ bg: C.seg, parts: [{ text: 'from memory ', color: C.faint }] }] : []),
           { bg: C.segAlt, parts: [{ text: ` ${fmtShort(end - start)} `, color: C.ink }] },
         ]
     const timelineHeader = header('timeline', 'Timeline', rows.timeline > 0, !turn, timelineSegs)
@@ -359,10 +389,12 @@ export function registerRail(on: On) {
     if (rows.timeline) {
       // The turn's prompt opens the section, on up to PROMPT_ROWS rows of its own, before the tool rows.
       const lines = Math.min(promptRows, Math.max(0, rows.timeline - 1))
+      const receiptShown = Math.min(receiptRows, Math.max(0, rows.timeline - 1 - lines))
       out.push(
         body('timeline', rows.timeline, [
           lines > 0 && turn?.prompt ? <Box key="prompt" height={lines}><Text color={C.soft} italic wrap="wrap">{turn.prompt}</Text></Box> : null,
-          ...(await toolRows(rows.timeline - lines)),
+          receiptShown ? receiptRow() : null,
+          ...(await toolRows(rows.timeline - lines - receiptShown)),
         ]),
       )
     }
@@ -427,6 +459,7 @@ export function registerRail(on: On) {
       if (shown.length < files.length) fileLines.push(<Text key="files-more" color={C.faint}>{`  +${files.length - shown.length} more`}</Text>)
       out.push(body('files-body', rows.files, fileLines))
     }
+
     return surface('rail', out)
   })
 
