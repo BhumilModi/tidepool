@@ -507,6 +507,8 @@ test('pressing a file opens the diff pane with its edits', OFF, async ($, on) =>
   await ui.press({ key: 'file:/repo/src/a.ts' })
   expect(w.opened.map(o => [o.id, o.title])).toContainEqual(['tidepool-diff', 'src/a.ts'])
   const diff = await $.ui.mount(diffPane)
+  // Same width as the rail, so switching tabs never resizes the dock under the pointer.
+  expect((w.opened.find(o => o.id === 'tidepool-diff') as { columns?: number } | undefined)?.columns).toBe(44)
   expect(await textOf(diff)).toContain('edit 1 of 1')
   const code = await diff.find({ type: 'Code' })
   expect(code?.props.format).toBe('diff')

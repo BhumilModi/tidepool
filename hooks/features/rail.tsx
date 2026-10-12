@@ -99,13 +99,14 @@ async function planData($: EngineInterface, shown: ReadonlySet<string>) {
 // Shows a file's diff for a turn in the diff pane, opening it or re-targeting the open one.
 async function openDiff($: EngineInterface, turnId: string, path: string, title: string) {
   await update($, diffFile, () => ({ turnId, path }))
-  await $.ui.open({ id: DIFF_ID, title })
+  await $.ui.open({ id: DIFF_ID, title, columns: RAIL_COLUMNS })
 }
 
 // The diff pane: each of the turn's edits to the file, a dim label then its hunks as a diff.
 async function drawDiff($: EngineInterface, e: PaneInput) {
   const { Box, Button, Code, Text } = $.ui.resolve(e)
   const C = palette()
+// It asks the rail's width: the dock sizes to the tab shown, so a wider diff moved the tab row under the pointer.
   const shown = await read($, diffFile)
   if (!shown) {
     return (
